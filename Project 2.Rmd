@@ -1,0 +1,356 @@
+---
+title: "Project 2"
+author: "Jake Brophy, Seungmin Lee, Angad Singh Shergill"
+date: "2/11/2022"
+output: 
+  pdf_document:
+    toc: true
+    number_sections: true
+---
+
+Jake Brophy UID: 305088618
+
+Angad Singh Shergill UID: 204962102
+
+Seungmin Lee UID: 905880427
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction:
+
+The dataset we have chosen is a time series of Philippine Economic data from 1999 to 2016. The variables of interest are unemployment, which is measured at a quarterly frequency in percent, the PSEI, which is a Philippine stock index that is a good indicator of the overall performance of the Philippine stock market, also measured quarterly, and the real GDP growth the Philippine Economy, also measured quarterly. The goal of this analysis is to fit a model that can match the trend and seasonality of unemployment in the Philippines, at first using ARIMA, exponential smoothing, and Holt Winters, then transitioning into using a VAR model that can incorporate multible variables into our analysis. For the VAR model, we have chosen to use real GDP growth as the other variable in our analysis.  
+
+# Part a
+
+```{r}
+#Read in Data
+df <- read.csv("SampleVar.csv")
+df <- df[,c('unem', 'psei', "real_gdp_growth")]
+#Convert to time series
+df.ts <- ts(df, start = 1999, frequency=4)
+library(forecast)
+#Time series plot
+tsdisplay(df.ts[,"unem"], main = "Time Series Plot of Unemployment")
+```
+
+
+
+# Part b
+
+```{r}
+#STL decomposition
+plot(stl(df.ts[,"unem"], s.window="periodic"))
+```
+
+
+
+```{r}
+library(forecast)
+dcmp <- decompose(df.ts, "multiplicative")
+dcms <- dcmp$seasonal
+t.ylab <- seq(1999, 2018, length = length(dcms))
+plot(t.ylab, dcms, ylab = "Seasonal Fluctuations", xlab = "Time",type = "l")
+```
+
+Judging from the initial STl decomposition, ACF, and PACF, it appears that seasonality is present and that there is serial correlation. Evidence of seasonality can be further seen after a multiplicative decomposition of the series and individually plotting of the seasonal component, which varies between 0.96 and 1.02. It also appears that there is a slightly negative trend, and when investigating the residuals after STL decomposition we can see that it does appear to have a cyclical structure. In addition, although it is not perfectly clear, the spikes in the PACF at lags 4 and 8 suggest that there is seasonality present, so it might make sense to include an S-AR() function. 
+
+# Part c
+
+```{r}
+#Create trend variable
+t <- seq(1999, 2018, length = length(df.ts[,"unem"]))
+t2 <- -t
+#Generate Arima model with trend, cycles, and seasonality
+m1 <- Arima(df.ts[,"unem"],order=c(1,1,0),seasonal=list(order=c(2,0,0)), xreg = t2)
+```
+
+The model I picked was an Arima(1,1,0)(2,0,0) with an additional external regressor in the form of a negative linear trend. The cycles present in the data were taken care of by the Arma(1,0) component, which was necessary due to the serial correlation present in the original data, and the trend was taken care of by the Arima(1,1,0), as well as the included negative linear trend. It was necessary to include the I(1) component because the data did not appear to be covariance stationary, so taking the first difference made the data covariance stationary. The seasonal component of the data was taken care of by the S-Arma(2,0), which was necessary to include because of the previously discussed seasonality present in the data. 
+
+# Part e
+
+```{r}
+#Make variable for residuals and fitted
+res <- m1$residuals
+res <- res[1:length(res)]
+fit <- fitted(m1)
+fit <- fit[1:length(fit)]
+#Plot residuals vs fited
+plot(fit, res, ylab = "Residuals", xlab = "Fitted Values", main = "Residuals vs Fitted Plot")
+```
+
+From the residuals vs fitted plot, we can see that the mean of residuals is approximately zero. However, there still appears to be a pattern in the residuals, which suggests that not all of the dynamics were taken out.
+
+# Part f
+
+```{r}
+#Look at ACF and PACF of residuals
+tsdisplay(res, main = "Time Series Plot of Residuals")
+```
+
+We can still see some spikes and cycles in the ACF and PACF plot. This suggests that not all dynamics were taken out, which reinforces our analyses of the residuals.
+
+
+# Part g
+
+```{r}
+library(strucchange)
+y=recresid(m1$res~1)
+#Plot recursive residuals
+plot(y, pch=16,ylab="Recursive Residuals")
+#Plot recursive residuals with window for better interpretability
+plot(efp(m1$res~1, type = "Rec-CUSUM"))
+```
+
+We can see from the initial investigation of CUSUM it appears that our model might break at lower frequencies. However, when plotted, we can see that the residuals remain within the two bands, which may suggest that the possible breakage at lower frequencies is not statistically significant. 
+
+# Part h
+
+```{r}
+#Look at model summary
+summary(m1, diagnostics = TRUE)
+```
+
+From the summary we can see that the coefficients of our model were -0.3714 for ar1, 0.2834 for S-AR(1), 0.4972 for S-AR(2), and -0.0439 for the linear trend. The respective AIC and BIC are 242.38, and 254.68, and we can observe that the MAPE is 8.228371, which is not terrible but it is likely we can find more accurate models. The possibility of finding more accurate models is reinforced by the idea that our residuals still exhibit some dynamics that we need to address. Overall, the diagnostic test suggests that we managed many of the dynamics like seasonality, cycles, and trend, but that we have room for improvement which we will explore in the next section.
+
+# Part i
+
+```{r}
+#Create external regressor with length 12 for prediction
+t3 <- seq(1999, 2018, length = 12)
+t4 <- -t3
+#Plot the forecast of our model
+plot(forecast(m1, xreg = t4), interval = "prediction", ylab = "Unemployment", xlab = "Time")
+```
+
+
+# Part j
+
+```{r}
+library(rpart)
+#conduct train test split
+train <- window(df.ts[,"unem"], start = c(1999), end = c(2016))
+test <- window(df.ts[,"unem"], start = c(2016, 1))
+#Create external regressor for train test split
+t.train <- seq(1999, 2016, length = length(train))
+t.train2 <- -t.train
+t.test <- seq(1999, 2016, length = 12)
+t.test2 <- -t.test
+
+#generate forecasts
+
+#Our model
+mari <- Arima(train,order=c(1,1,0),seasonal=list(order=c(2,0,0)), xreg = t.train2)
+mari.t <- forecast(mari, train, xreg = t.test2, h = 12)
+
+#Auto generated model
+arima.t <- auto.arima(train)
+ari.f <- forecast(arima.t, train, h = length(test))
+
+#ETS model
+ets.t <- ets(train)
+ets.f <- forecast.ets(ets.t, h = length(test))
+
+#HoltWinters Model
+hw.t <- HoltWinters(train)
+hw.p <- forecast(hw.t, h = length(test))
+
+#Evaluating accuracies of each prediction
+holt.acc <- accuracy(hw.p, test)["Test set","MAPE"]
+ets.acc <- accuracy(ets.f, test)["Test set","MAPE"]
+ari.acc <- accuracy(ari.f, test)["Test set","MAPE"]
+mari.acc <- accuracy(mari.t, test)["Test set","MAPE"]
+
+#Putting accuracy in a table
+tab <- matrix(c(holt.acc, ets.acc, ari.acc, mari.acc), ncol = 1)
+colnames(tab) <- "MAPE"
+rownames(tab) <- c("Holt Winters", "ETS", "ARIMA(0,1,1)(0,0,2)", "ARIMA(1,1,0)(2,0,0)")
+tab
+```
+
+We can see from our table that the auto generated ARIMA model had the best MAPE, followed by exponential smoothing, then HoltWinters, and then by the ARIMA model we generated.
+
+# Part k
+
+```{r}
+#Concatenate every mean
+pred.df <- cbind(ets.f$mean, ari.f$mean, hw.p$mean, mari.t$mean)
+pred.df <- pred.df[1:12,]
+#Take the mean of every row which is each period's prediction
+meanpred <- rowMeans(pred.df)
+#Create a dataframe with test set and combined prediction
+test.df <- data.frame(test, meanpred)
+#Calculate MAPE
+mean.acc <- mean(abs((test.df$test- test.df$meanpred)/test.df$test)) * 100
+#Add to the previous table
+tab2 <- matrix(c(holt.acc, ets.acc, ari.acc, mari.acc, mean.acc), ncol = 1)
+colnames(tab2) <- "MAPE"
+rownames(tab2) <- c("Holt Winters", "ETS", "ARIMA(0,1,1)(0,0,2)", "ARIMA(1,1,0)(2,0,0)",
+                   "Combination")
+#Print out table
+tab2
+
+```
+
+The Combination of every forecast performs better than every model with an MAPE of 7.403286, only slightly better than the ARIMA(0,1,1)(0,0,2) model. 
+
+# Part l
+
+```{r}
+#Create dataframe with variables of interest
+df.df <- data.frame(df.ts[,c("real_gdp_growth","unem")])
+#Rename column names
+colnames(df.df) <- c("GDP", "Unem")
+library(vars)
+#Evaluate best VAR model
+VARselect(df.df)
+```
+
+
+```{r}
+#Generate VAR(4) model
+var1 <- VAR(df.df, p = 4)
+#Plot FEVD
+plot(fevd(var1, n.ahead = 5))
+#Print summary of model
+summary(var1)
+```
+
+```{r}
+#Pull out fitted values of Var model
+fit <- fitted(var1)
+#Generate sequences for y values of fitted vs real graph of GDP
+t.yvalue1 <- seq(1999,2018, length = length(fit[,"GDP"]))
+t.yvalue2 <- seq(1999,2018, length = length(df.ts[,"real_gdp_growth"]))
+#Plot Fitted vs real values
+plot(t.yvalue2, df.ts[,"real_gdp_growth"], type = "l", col = "red", ylab = "GDP Growth",
+     xlab = "Time", main = "Actual vs Fitted Values")
+lines(t.yvalue1, fit[,"GDP"], type = "l")
+legend(x = "topright", legend = c("Original", "Fitted"), col = c("red", "black"), 
+       lty = c(1))
+#Generate sequences for y values of fitted vs real graph of Unemployment
+t.yvalue3 <- seq(1999,2018, length = length(fit[,"Unem"]))
+t.yvalue4 <- seq(1999,2018, length = length(df.ts[,"unem"]))
+#Plot GDP fitted vs actual values
+plot(t.yvalue4, df.ts[,"unem"], type = "l", col = "blue", ylab = "Unem",
+     xlab = "Time", main = "Actual vs Fitted Values")
+lines(t.yvalue3, fit[,"Unem"], type = "l")
+legend(x = "topright", legend = c("Original", "Fitted"), col = c("blue", "black"), 
+       lty = c(1))
+```
+
+We fit VAR(4) model(Unem = GDP.l1 + Unem.l1 + GDP.l2 + Unem.l2 + GDP.l3 + Unem.l3 + GDP.l4 + Unem.l4 + const). From the summary, we can see that $unem_{T-1}$ = -0.06547, $unem_{T-2}$ = -0.08187, $unem_{T-3}$ = -0.11348, $unem_{T-4}$ = 0.12601, $gdp_{T-1}$ = 0.79256, $gdp_{T-2}$ = -0.10334, $gdp_{T-3}$ = -0.03496 and $gdp_{T-4}$ = 0.12601. Adjusted R-squared is 0.5368 and $gdp_{T-1}$ and the constant are significant with 0.05 level.
+
+We can see from the FEVD that neither series plays a large role in determining the future value of the other. We do see that GDP plays a role influencing the future value of unemployment earlier than unemployment does for GDP. In the FEVD of unemployment growth, we can see that GDP begins affecting unemployment at period 3 and then stays fairly constant through period 5, while in the GDP FEVD, unemployment is not significant until period 4.
+
+From the fitted vs actual plot we can see that the model matched the data fairly well with the exceptions of periods with large fluctuations which it tended to underestimate.
+
+# Part m
+
+```{r, fig.height=10, fig.width=20, message=FALSE, warning=FALSE}
+#Plot the irf of the VAR(4) model
+plot(irf(var1))
+```
+
+The irf plots shows that unemployment is positively affected by a one standard deviation unemployment shock and unemployment spikes regularly with decreased magnitude and then levels out. A shock in GDP causes an initial slight decrease in unemployment, but unemployment then evens out out to a level slightly below the initial level.  
+
+Similarly, the irf plot shows that and initial shock to GDP causes a sharp increase in GDP that eventually returns to the previous level. An unemployment shock initially causes GDP to decrease, then spike and eventually return to a level that is slightly lower than the original.
+
+# Part n
+
+```{r}
+#Conduct grangertest on our two variables
+grangertest(df.df$GDP~df.df$Unem)
+grangertest(df.df$Unem~df.df$GDP)
+```
+
+Since the p values are not significant i.e- less than 5%, we fail to reject the null in both cases and therefore we can say neither variable causes the other.
+
+
+# Part o
+
+```{r}
+library(vars)
+#Train test split
+train2 <- window(df.ts[,c("unem","real_gdp_growth")], start = c(1999), end = c(2016))
+train2.df <- data.frame(train2)
+test2 <- window(df.ts[,c("unem","real_gdp_growth")], start = c(2016, 1))
+test2.df <- data.frame(test2)
+#Generate Var model on train set
+var.1t <- VAR(train2.df, p = 4)
+p.var <- predict(var.1t, train2.df, h=12, se.fit = TRUE, n.ahead = length(test), interval = "prediction")
+#Pull out the individual unemployment and GDP fitted values
+var.u <- p.var[[1]][['unem']][,1]
+var.gdp <- p.var[[1]][['real_gdp_growth']][,1]
+#Calculate MAPE
+mean.u <- mean(abs((var.u- test2.df$unem)/var.u)) * 100
+mean.gdp <- mean(abs((var.gdp- test2.df$real_gdp_growth)/var.gdp)) * 100
+#Add values to the previous table
+tab3 <- matrix(c(holt.acc, ets.acc, ari.acc, mari.acc, mean.acc, mean.u, mean.gdp), ncol = 1)
+colnames(tab3) <- "MAPE"
+rownames(tab3) <- c("Holt Winters", "ETS", "ARIMA(0,1,1)(0,0,2)", "ARIMA(1,1,0)(2,0,0)",
+                   "Combination", "VAR(Unem)", "VAR(GDP)")
+#Print table
+tab3
+#Rename columns
+colnames(train2) <- c("Unem", "GDP")
+#Plot the forecast
+plot(forecast(VAR(train2, p = 4)))
+#Convert predictions to timeseries for use in autoplot
+var.u.ts <- ts(var.u, start = 2016, end = 2018, frequency = 4)
+Unemployment <- df.ts[,"unem"]
+#Plot the VAR model predictions vs the other models we tried vs the actual values
+autoplot(Unemployment) + 
+  autolayer(forecast(hw.t), series = "Holt Winters", PI = FALSE)+
+  autolayer(ari.f, series = "ARIMA(0,1,1)(0,0,2)", PI = FALSE) +
+  autolayer(ets.f, series = "ETS", PI = FALSE) + 
+  autolayer(var.u.ts, series = "VAR") + 
+  autolayer(mari.t, series = "ARIMA(1,1,0)(2,0,0)", PI = FALSE)
+```
+
+We can see that in contrast to the other models, VAR also produces a forecast for the other variable of interest, GDP. We can also see that it has the lowest MAPE of every model we have tried so far, suggesting that it is the most accurate out of any model we have tried so far. This finding is then reinforced by the predicted values vs the actual test set, which shows VAR produces a forecast that is closest to the real value.
+  
+# Conclusion 
+  
+ The unemployment rate is one of the important economic indicators because it measures the underutilization of the labor supply and contains valuable information on a country's labor market situation. In this project, we conducted a time series analysis and forecast the data using ARIMA, Holt-Winters, ETS model. Also, we fit VAR model using unemployment and real GDP growth and predict the future unemployment in the Philippines on a quarterly basis using this VAR model.
+ 
+ First investigation showed that the data had a slight upward trend before 2005 because of new entrants that joined the labor force and the slump in employment in the agriculture sector(1). The data had a major fall between 2005 to 2006 due to the millions of jobs created within that year(2) and new unemployment definition(3). Since 2006, the data have a downward trend and clear seasonal patterns.
+
+ We chose ARIMA(1,1,0)(2,0,0) model for estimating and forecasting the unemployment rate in the Philippines because of seasonality and non-stationality. From the respective residuals vs fitted values plot, the ARIMA model which we are using is not enough because the spread of the residuals is increasing and there is a chance that the data is heteroskedasticity, which may suggest that Philippines' labor market situation has changed. Also from the ACF and PACF plot, we can see that there are some cyclic dynamics left. 
+
+ 
+ We forecast the 12-steps ahead from ARIMA, Holt-Winters, and ETS models. To calculate MAPE, we split our data with train(1999~2016) and test data. As a result, we can see that the combination model performs the best with an MAPE of 7.403286. Using above models, we forecast that unemployment would have a downward trend for next 3 years. 
+ 
+ Next we fit VAR(4) model(Unem = GDP.l1 + Unem.l1 + GDP.l2 + Unem.l2 + GDP.l3 + Unem.l3 + GDP.l4 + Unem.l4 + const). From the summary, we can see that $unem_{T-1}$ = -0.06547, $unem_{T-2}$ = -0.08187, $unem_{T-3}$ = -0.11348, $unem_{T-4}$ = 0.12601, $gdp_{T-1}$ = 0.79256, $gdp_{T-2}$ = -0.10334, $gdp_{T-3}$ = -0.03496 and $gdp_{T-4}$ = 0.12601. Adjusted R-squared is 0.5368 and $gdp_{T-1}$ and the constant are significant with 0.05 level.
+ 
+ Impulse response functions plot suggests that GDP mostly negatively influence unemployment but the magnitude is very small.
+ 
+ The unemployment rate is considered as a lagging indicator and closely related with real GDP growth. However, from a Granger-Causality test, we can't reject $H_0$ both of cases with p-values 0.2098 and 0.1053. That is, GDP doesn't have a great influence in the movements of the unemployment rate in the Philippines and vice versa. 
+ 
+ We forecast the data using VAR(4) model. As a result, VAR(unem) model performs best with the lowest MAPE(5.461) and forecast a downward trend for next 3 years.
+ 
+  In conclusion, we hope that this project aids to have a better understanding of the unemployment rate to help solving the unemployment in the Philippines. For future work, we could fit VAR model and forecast the data using other variables such as PSEI, population, inflation rate and GNI and different frequency. Also, for predictions, future work could improve our fit and prediction by using more complicated models like the autoregressive conditional heteroskedasticity model to deal with changing spread of residuals.
+ 
+ 
+
+Reference
+(1) Urrutia, J. D., Tampis, R. L., & Atienza, J. E. (2017). An Analysis on the Unemployment Rate in the Philippines: A Time Series Data Approach. In Journal of Physics: Conference Series (Vol. 820, Issue 1, p. 012008). IOP Publishing, 5p.
+https://iopscience.iop.org/article/10.1088/1742-6596/820/1/012008/meta
+
+(2) ) Urrutia, J. D., Tampis, R. L., & Atienza, J. E. (2017). An Analysis on the Unemployment Rate in the Philippines: A Time Series Data Approach. In Journal of Physics: Conference Series (Vol. 820, Issue 1, p. 012008). IOP Publishing, 6p.
+
+(3) CARMELITA N. ERICTA, (2005). Philippine Labor Force Survey October 2005. Philippine Statistics Authority. Retrieved February 19, 2022, from
+
+https://psa.gov.ph/content/philippine-labor-force-survey-october-2005-preliminary-results
+
+https://iopscience.iop.org/article/10.1088/1742-6596/820/1/012008/meta
+
+https://psa.gov.ph/statistics/survey/labor-and-employment/labor-force-survey/title/Employment%20Situation%20in%20April%202020
+
+https://ilostat.ilo.org/resources/concepts-and-definitions/description-unemployment-rate/
+
+https://www.thebalance.com/unemployment-rate-3305744    
+
+https://www.thebalance.com/lagging-economic-indicators-list-index-and-top-3-3305860
+
